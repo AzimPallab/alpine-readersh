@@ -96,8 +96,16 @@ def load_clean(file_bytes, filename):
     before = len(df); df = df.dropna(how='all')
     if before-len(df): issues.append(f"Removed {before-len(df)} blank rows")
 
+    # Strip whitespace and replace nan strings with None
     for col in ['Contact Name','Contact Email','EventAction','EventSource','Report Title','Authors','Leaf product']:
         df[col] = df[col].astype(str).str.strip()
+        df[col] = df[col].replace({'nan': None, 'NaN': None, 'NULL': None, 'none': None, '': None})
+
+    # Drop rows missing critical fields
+    before = len(df)
+    df = df.dropna(subset=['Contact Name','Contact Email','Report Title','EventAction','EventDate'])
+    if before-len(df): issues.append(f"Removed {before-len(df)} rows with missing critical fields")
+
     df['EventAction'] = df['EventAction'].str.lower()
     df['EventSource']  = df['EventSource'].str.lower()
 
@@ -128,8 +136,12 @@ def analyse(df):
          '07':'Jul','08':'Aug','09':'Sep','10':'Oct','11':'Nov','12':'Dec'})
 
     top_products = email_op['Leaf product'].str.strip().value_counts().head(6)
-    top_reports  = email_op['Report Title'].str.strip().value_counts().head(5)
-    top_authors  = email_op['Authors'].str.strip().value_counts().head(5)
+
+    # Filter out any remaining nan values before ranking
+    top_reports = (email_op[email_op['Report Title'].str.lower() != 'nan']
+                   ['Report Title'].str.strip().value_counts().head(5))
+    top_authors = (email_op[email_op['Authors'].str.lower() != 'nan']
+                   ['Authors'].str.strip().value_counts().head(5))
 
     e_reads = email_op.groupby('Contact Name').size().rename('Email Opens')
     p_reads = portal_op.groupby('Contact Name').size().rename('Portal Opens')
