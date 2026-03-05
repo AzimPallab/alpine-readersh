@@ -66,7 +66,6 @@ div[data-testid="stFileUploader"] {{ border:2px dashed {C_BLUE} !important; bord
 
 st.markdown(f'<div class="am-nav">{logo_html}<span class="am-nav-right">Readership Analytics</span></div>', unsafe_allow_html=True)
 
-# ── Column aliases ─────────────────────────────────────────────────────────────
 REQUIRED = ['Contact Name','Contact Email','EventSource','EventAction','EventDate','Report Title','Authors','Leaf product']
 ALIASES  = {
     'contact name':'Contact Name','name':'Contact Name',
@@ -123,22 +122,15 @@ def analyse(df):
     email_op  = opens[opens['EventSource']=='email']
     portal_op = opens[opens['EventSource'].isin(['my oxford','myoxford','portal'])]
 
-    # Monthly opens (email only for trend chart)
     monthly = email_op.groupby('Month').size().reset_index(name='Opens')
     monthly['Label'] = monthly['Month'].astype(str).str[-2:].map(
         {'01':'Jan','02':'Feb','03':'Mar','04':'Apr','05':'May','06':'Jun',
          '07':'Jul','08':'Aug','09':'Sep','10':'Oct','11':'Nov','12':'Dec'})
 
-    # Top products
     top_products = email_op['Leaf product'].str.strip().value_counts().head(6)
+    top_reports  = email_op['Report Title'].str.strip().value_counts().head(5)
+    top_authors  = email_op['Authors'].str.strip().value_counts().head(5)
 
-    # Top reports (email opens)
-    top_reports = email_op['Report Title'].str.strip().value_counts().head(5)
-
-    # Top authors (email opens)
-    top_authors = email_op['Authors'].str.strip().value_counts().head(5)
-
-    # Most active readers — email + portal opens side by side
     e_reads = email_op.groupby('Contact Name').size().rename('Email Opens')
     p_reads = portal_op.groupby('Contact Name').size().rename('Portal Opens')
     readers = pd.DataFrame({'Email Opens': e_reads, 'Portal Opens': p_reads}).fillna(0).astype(int)
@@ -158,11 +150,8 @@ def analyse(df):
         'top_reports':     top_reports,
         'top_authors':     top_authors,
         'readers':         readers,
-        'email_opens':     len(email_op),
-        'portal_opens':    len(portal_op),
     }
 
-# ── Charts — original style ───────────────────────────────────────────────────
 def make_bar(monthly):
     fig, ax = plt.subplots(figsize=(5, 2.2))
     labels, values = monthly['Label'].tolist(), monthly['Opens'].tolist()
@@ -192,7 +181,6 @@ def make_donut(top_products):
     ax.set_title('Opens by Product Category', fontsize=9, color='#2B2B2B', pad=6, fontweight='bold')
     fig.tight_layout(); return fig
 
-# ── Table renderers ───────────────────────────────────────────────────────────
 def render_simple(rows, cols):
     hdr = '<div class="tbl-hdr">' + ''.join([
         f'<span class="t-rank">#</span>' if i==0 else
@@ -212,19 +200,12 @@ def render_readers(readers_df):
     hdr = '<div class="tbl-hdr"><span class="t-rank">#</span><span class="t-name">Reader</span><span class="t-sub">Email</span><span class="t-sub">Portal</span><span class="t-num">Total</span></div>'
     body = ""
     for i, row in readers_df.iterrows():
-        body += f'''<div class="tbl-row">
-            <span class="t-rank">{i+1}</span>
-            <span class="t-name">{row["Contact Name"]}</span>
-            <span class="t-sub">{int(row["Email Opens"]):,}</span>
-            <span class="t-sub">{int(row["Portal Opens"]):,}</span>
-            <span class="t-num">{int(row["Total"]):,}</span>
-        </div>'''
+        body += f'<div class="tbl-row"><span class="t-rank">{i+1}</span><span class="t-name">{row["Contact Name"]}</span><span class="t-sub">{int(row["Email Opens"]):,}</span><span class="t-sub">{int(row["Portal Opens"]):,}</span><span class="t-num">{int(row["Total"]):,}</span></div>'
     return f'<div class="tbl-wrap">{hdr}{body}</div>'
 
 def kpi_card(label, value, ac):
     return f'<div class="kpi-card" style="--ac:{ac}"><div class="kpi-val">{value}</div><div class="kpi-lbl">{label}</div></div>'
 
-# ── PDF ───────────────────────────────────────────────────────────────────────
 PBLUE=colors.HexColor("#0077C8"); PDARK=colors.HexColor("#2B2B2B")
 PLBLU=colors.HexColor("#F0F7FD"); PGREY=colors.HexColor("#F4F8FC")
 PRULE=colors.HexColor("#D0DCE8"); PWHITE=colors.white; PMGREY=colors.HexColor("#999999")
@@ -237,7 +218,6 @@ def generate_pdf(data, account_name):
     buf=io.BytesIO(); W,H=A4; c=canvas.Canvas(buf,pagesize=A4)
     M=12*mm; CW=(W-2*M-4*mm)/2
 
-    # Header
     c.setFillColor(PWHITE); c.rect(0,H-38*mm,W,38*mm,fill=1,stroke=0)
     c.setFillColor(PBLUE);  c.rect(0,H-1.5*mm,W,1.5*mm,fill=1,stroke=0)
     if os.path.exists(LOGO_PATH):
@@ -250,7 +230,6 @@ def generate_pdf(data, account_name):
     c.drawRightString(W-M,H-30*mm,f"Generated {datetime.now().strftime('%d %b %Y')}")
     c.setFillColor(PRULE); c.rect(0,H-39*mm,W,0.5*mm,fill=1,stroke=0)
 
-    # KPI tiles
     kpis = [
         ("Total Opens",    f"{data['total_opens']:,}",    PBLUE),
         ("Unique Readers", f"{data['unique_readers']:,}", PDARK),
@@ -268,16 +247,13 @@ def generate_pdf(data, account_name):
         c.setFont("Helvetica",6.5); c.setFillColor(colors.HexColor("#666666"))
         c.drawCentredString(bx+2*mm+(bw-3.5*mm)/2,by+2.5*mm,lbl.upper())
 
-    # Charts
     cy=H-115*mm
-    c.drawImage(fig_to_ir(make_bar(data['monthly'])),   M,cy,width=108*mm,height=50*mm,preserveAspectRatio=True,mask='auto')
+    c.drawImage(fig_to_ir(make_bar(data['monthly'])),M,cy,width=108*mm,height=50*mm,preserveAspectRatio=True,mask='auto')
     c.drawImage(fig_to_ir(make_donut(data['top_products'])),M+112*mm,cy-6*mm,width=72*mm,height=58*mm,preserveAspectRatio=True,mask='auto')
 
-    # Divider
     dy=cy-6*mm
     c.setStrokeColor(PRULE); c.setLineWidth(0.5); c.line(M,dy,W-M,dy)
 
-    # Tables
     ty=dy-4*mm; col_w=W/2-16*mm; rh=6*mm
 
     def shdr(x,y,title,col):
@@ -295,21 +271,17 @@ def generate_pdf(data, account_name):
         c.drawRightString(x+col_w-1*mm,y+1.8*mm,str(val))
         return y-rh
 
-    # Left: Top Reports + Top Authors
     y1=shdr(M,ty,"TOP REPORTS BY OPENS",PBLUE)
     for i,(t,v) in enumerate(data['top_reports'].items()): y1=trow(M,y1,i+1,t,f"{v:,}",i%2==1)
     y1-=2.5*mm
     y1=shdr(M,y1,"TOP AUTHORS BY OPENS",PBLUE)
     for i,(a,v) in enumerate(data['top_authors'].items()): y1=trow(M,y1,i+1,a,f"{v:,}",i%2==1)
 
-    # Right: Most Active Readers with email/portal split
-    rx=M+CW+4*mm; rw=col_w
-    y2=ty
+    rx=M+CW+4*mm; rw=col_w; y2=ty
     c.setFillColor(PBLUE); c.rect(rx,y2,rw,5.5*mm,fill=1,stroke=0)
     c.setFont("Helvetica-Bold",7.5); c.setFillColor(PWHITE)
     c.drawString(rx+3*mm,y2+1.5*mm,"MOST ACTIVE READERS")
     y2-=rh
-    # Sub-header
     c.setFont("Helvetica",6); c.setFillColor(PMGREY)
     c.drawString(rx+6*mm,y2+1.8*mm,"Reader")
     c.drawRightString(rx+rw-22*mm,y2+1.8*mm,"Email")
@@ -321,8 +293,7 @@ def generate_pdf(data, account_name):
         if i%2==1: c.setFillColor(PLBLU); c.rect(rx,y2,rw,rh-0.5*mm,fill=1,stroke=0)
         c.setFont("Helvetica-Bold",7); c.setFillColor(PBLUE); c.drawString(rx+1.5*mm,y2+1.8*mm,str(i+1))
         c.setFont("Helvetica",7); c.setFillColor(PDARK)
-        name = row['Contact Name']
-        c.drawString(rx+6*mm,y2+1.8*mm,name[:26]+'...' if len(name)>26 else name)
+        name=row['Contact Name']; c.drawString(rx+6*mm,y2+1.8*mm,name[:26]+'...' if len(name)>26 else name)
         c.setFont("Helvetica",6.5); c.setFillColor(colors.HexColor("#555555"))
         c.drawRightString(rx+rw-22*mm,y2+1.8*mm,f"{int(row['Email Opens']):,}")
         c.drawRightString(rx+rw-11*mm,y2+1.8*mm,f"{int(row['Portal Opens']):,}")
@@ -330,7 +301,6 @@ def generate_pdf(data, account_name):
         c.drawRightString(rx+rw-1*mm,y2+1.8*mm,f"{int(row['Total']):,}")
         y2-=rh
 
-    # Footer
     c.setFillColor(PDARK); c.rect(0,0,W,9*mm,fill=1,stroke=0)
     c.setFillColor(PBLUE); c.rect(0,9*mm,W,0.8*mm,fill=1,stroke=0)
     c.setFont("Helvetica",6.5); c.setFillColor(colors.HexColor("#AAAAAA"))
@@ -340,7 +310,6 @@ def generate_pdf(data, account_name):
     c.save(); buf.seek(0)
     return buf.read()
 
-# ── UI ─────────────────────────────────────────────────────────────────────────
 cu, cn = st.columns([2,1])
 with cu: uploaded = st.file_uploader("Upload analytics file (.xlsx, .xls, .csv)", type=["xlsx","xls","csv"])
 with cn: account_name = st.text_input("Account / Client name", placeholder="e.g. Richardson Wealth")
@@ -358,8 +327,6 @@ if uploaded:
 
     st.caption(f"Period: **{data['date_min']} — {data['date_max']}**  ·  Account: **{account_name}**")
 
-    # KPIs
-    st.markdown('<div class="sec-title">Key Metrics</div>', unsafe_allow_html=True)
     c1,c2,c3,c4,c5 = st.columns(5)
     for col,lbl,val,ac in [
         (c1,"Total Opens",    f"{data['total_opens']:,}",    C_BLUE),
@@ -371,29 +338,23 @@ if uploaded:
         with col: st.markdown(kpi_card(lbl,val,ac), unsafe_allow_html=True)
 
     st.markdown("")
-
-    # Charts
     st.markdown('<div class="sec-title">Trends & Distribution</div>', unsafe_allow_html=True)
     ch1, ch2 = st.columns([3,2])
     with ch1: st.pyplot(make_bar(data['monthly']), use_container_width=True)
     with ch2: st.pyplot(make_donut(data['top_products']), use_container_width=True)
 
-    # Tables
     st.markdown('<div class="sec-title">Rankings</div>', unsafe_allow_html=True)
     t1,t2,t3 = st.columns(3)
     with t1:
         st.markdown("**Top Reports**")
-        rows = [(t,f"{v:,}") for t,v in data['top_reports'].items()]
-        st.markdown(render_simple(rows,['#','Report','Opens']), unsafe_allow_html=True)
+        st.markdown(render_simple([(t,f"{v:,}") for t,v in data['top_reports'].items()],['#','Report','Opens']), unsafe_allow_html=True)
     with t2:
         st.markdown("**Top Authors**")
-        rows = [(a,f"{v:,}") for a,v in data['top_authors'].items()]
-        st.markdown(render_simple(rows,['#','Author','Opens']), unsafe_allow_html=True)
+        st.markdown(render_simple([(a,f"{v:,}") for a,v in data['top_authors'].items()],['#','Author','Opens']), unsafe_allow_html=True)
     with t3:
         st.markdown("**Most Active Readers**")
         st.markdown(render_readers(data['readers']), unsafe_allow_html=True)
 
-    # Export
     st.markdown("---")
     dl,_ = st.columns([1,3])
     with dl:
