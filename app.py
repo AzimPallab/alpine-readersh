@@ -67,7 +67,6 @@ div[data-testid="stFileUploader"] {{ border:2px dashed {C_BLUE} !important; bord
 
 st.markdown(f'<div class="am-nav">{logo_html}<span class="am-nav-right">Readership Analytics</span></div>', unsafe_allow_html=True)
 
-# ── Column aliases ─────────────────────────────────────────────────────────────
 REQUIRED = ['Contact Name','Contact Email','EventSource','EventAction','EventDate','Report Title','Authors','Leaf product']
 ALIASES  = {
     'contact name':'Contact Name', 'name':'Contact Name',
@@ -80,7 +79,6 @@ ALIASES  = {
     'leaf product':'Leaf product', 'product':'Leaf product', 'category':'Leaf product',
 }
 
-# ── Data loading & cleaning ────────────────────────────────────────────────────
 def load_clean(file_bytes, filename):
     issues = []
     try:
@@ -88,7 +86,6 @@ def load_clean(file_bytes, filename):
     except Exception as e:
         st.error(f"Could not read file: {e}"); st.stop()
 
-    # Normalise column names
     df.columns = df.columns.str.strip()
     rmap = {c: ALIASES[c.lower().strip()] for c in df.columns
             if c.lower().strip() in ALIASES and ALIASES[c.lower().strip()] not in df.columns}
@@ -100,40 +97,33 @@ def load_clean(file_bytes, filename):
     if missing:
         st.error(f"Missing required columns: {', '.join(missing)}"); st.stop()
 
-    # Drop fully blank rows
     before = len(df)
     df = df.dropna(how='all')
     if before - len(df):
         issues.append(f"Removed {before - len(df)} blank rows")
 
-    # Clean text fields — strip whitespace and null-like strings
     for col in ['Contact Name','Contact Email','EventAction','EventSource','Report Title','Authors','Leaf product']:
         df[col] = df[col].astype(str).str.strip()
         df[col] = df[col].replace({'nan':'', 'NaN':'', 'NULL':'', 'none':'', 'None':''})
         df[col] = df[col].replace('', None)
 
-    # Drop rows missing critical fields
     before = len(df)
     df = df.dropna(subset=['Contact Name','Contact Email','Report Title','EventAction','EventDate'])
     if before - len(df):
         issues.append(f"Removed {before - len(df)} rows with missing critical fields")
 
-    # Normalise event fields to lowercase
     df['EventAction'] = df['EventAction'].str.lower().str.strip()
     df['EventSource']  = df['EventSource'].str.lower().str.strip()
 
-    # Parse dates
     df['EventDate'] = pd.to_datetime(df['EventDate'], errors='coerce', infer_datetime_format=True)
     bad = df['EventDate'].isna().sum()
     if bad:
         issues.append(f"Removed {bad} rows with unparseable dates")
         df = df.dropna(subset=['EventDate'])
 
-    # Filter out login and auth events
     df = df[~df['EventAction'].isin(['login'])]
     df = df[~df['EventSource'].isin(['login.oxfordeconomics.com'])]
 
-    # Deduplicate: same reader + action + report + date = one event
     before = len(df)
     df = df.drop_duplicates(subset=['Contact Email','EventAction','Report Title','EventDate'])
     if before - len(df):
@@ -142,7 +132,6 @@ def load_clean(file_bytes, filename):
     df['Month'] = df['EventDate'].dt.to_period('M')
     return df, issues
 
-# ── Analysis ───────────────────────────────────────────────────────────────────
 def analyse(df):
     opens  = df[df['EventAction'] == 'initial_open']
     clicks = df[df['EventAction'] == 'click']
@@ -152,13 +141,10 @@ def analyse(df):
     email_cl  = clicks[clicks['EventSource'] == 'email']
     portal_cl = clicks[clicks['EventSource'].isin(['my oxford','myoxford','portal'])]
 
-    # Top products (email only, drop blank)
     top_products = (
         email_op[email_op['Leaf product'].notna()]
-        ['Leaf product'].str.strip().value_counts().head(8)
+        ['Leaf product'].str.strip().value_counts().head(6)
     )
-
-    # Top reports and authors (email only, drop blank/nan)
     top_reports = (
         email_op[email_op['Report Title'].notna()]
         ['Report Title'].str.strip().value_counts().head(5)
@@ -168,13 +154,12 @@ def analyse(df):
         ['Authors'].str.strip().value_counts().head(5)
     )
 
-    # Reader breakdown — email opens + portal opens per reader
     e_reads = email_op.groupby('Contact Name').size().rename('Email Opens')
     p_reads = portal_op.groupby('Contact Name').size().rename('Portal Opens')
     readers = pd.DataFrame({'Email Opens': e_reads, 'Portal Opens': p_reads}).fillna(0).astype(int)
     readers['Total'] = readers['Email Opens'] + readers['Portal Opens']
     readers_all = readers.sort_values('Total', ascending=False).reset_index()
-    readers_top = readers_all.head(10).reset_index(drop=True)  # web app: top 10
+    readers_top = readers_all.head(10).reset_index(drop=True)
 
     total_opens = len(opens)
 
@@ -193,11 +178,10 @@ def analyse(df):
         'top_products':    top_products,
         'top_reports':     top_reports,
         'top_authors':     top_authors,
-        'readers_top':     readers_top,    # top 10 — web app
-        'readers_all':     readers_all,    # all — PDF
+        'readers_top':     readers_top,
+        'readers_all':     readers_all,
     }
 
-# ── Charts (PDF only) ──────────────────────────────────────────────────────────
 def make_channel_chart(data):
     fig, ax = plt.subplots(figsize=(5.5, 2.4))
     categories  = ['Opens', 'Clicks']
@@ -216,8 +200,8 @@ def make_channel_chart(data):
     ax.set_xticks(x); ax.set_xticklabels(categories, fontsize=9, color='#333', fontweight='500')
 
     mx = max(email_vals + portal_vals) or 1
-    for vals in [email_vals, portal_vals]:
-        for xi, v in zip(x + (-bw/2 if vals is email_vals else bw/2), vals):
+    for vals, offset in [(email_vals, -bw/2), (portal_vals, bw/2)]:
+        for xi, v in zip(x + offset, vals):
             if v > 0:
                 ax.text(xi, v + mx * 0.02, f'{v:,}', ha='center', va='bottom',
                         fontsize=7, color='#333', fontweight='bold')
@@ -233,9 +217,9 @@ def make_donut(top_products):
         ax.text(0.5, 0.5, 'No product data', ha='center', va='center', transform=ax.transAxes)
         ax.axis('off'); return fig
 
-    n      = len(top_products)
-    labels = list(top_products.index)
-    vals   = list(top_products.values)
+    n      = min(len(top_products), len(CHART_COLORS))
+    labels = list(top_products.index)[:n]
+    vals   = list(top_products.values)[:n]
     cols   = CHART_COLORS[:n]
 
     fig, ax = plt.subplots(figsize=(5.5, 4.2))
@@ -253,7 +237,6 @@ def make_donut(top_products):
     fig.tight_layout(pad=0.8)
     return fig
 
-# ── Web table renderers ────────────────────────────────────────────────────────
 def render_simple(rows, cols):
     hdr = '<div class="tbl-hdr">' + ''.join([
         '<span class="t-rank">#</span>' if i == 0 else
@@ -293,7 +276,6 @@ def kpi_card(label, value, ac):
             f'<div class="kpi-lbl">{label}</div>'
             f'</div>')
 
-# ── PDF constants ──────────────────────────────────────────────────────────────
 PBLUE  = colors.HexColor("#0077C8")
 PDARK  = colors.HexColor("#2B2B2B")
 PLBLU  = colors.HexColor("#F0F7FD")
@@ -307,20 +289,18 @@ def fig_to_ir(fig):
     buf.seek(0); plt.close(fig)
     return ImageReader(buf)
 
-# ── PDF generation ─────────────────────────────────────────────────────────────
 def generate_pdf(data, account_name):
     buf = io.BytesIO()
     W, H = A4
     c = canvas.Canvas(buf, pagesize=A4)
     M  = 12 * mm
-    CW = (W - 2*M - 4*mm) / 2   # half-column width
+    CW = (W - 2*M - 4*mm) / 2
 
-    all_readers    = data['readers_all']
-    ROWS_PER_PAGE  = 38
-    reader_pages   = max(1, -(-len(all_readers) // ROWS_PER_PAGE))  # ceiling division
-    total_pages    = 1 + reader_pages
+    all_readers   = data['readers_all']
+    ROWS_PER_PAGE = 38
+    reader_pages  = max(1, -(-len(all_readers) // ROWS_PER_PAGE))
+    total_pages   = 1 + reader_pages
 
-    # ── Shared helpers ─────────────────────────────────────────────────────────
     def draw_header():
         c.setFillColor(PWHITE); c.rect(0, H-38*mm, W, 38*mm, fill=1, stroke=0)
         c.setFillColor(PBLUE);  c.rect(0, H-1.5*mm, W, 1.5*mm, fill=1, stroke=0)
@@ -355,9 +335,7 @@ def generate_pdf(data, account_name):
         c.drawRightString(x+w-1*mm, y+1.8*mm, str(val))
         return y - rh
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # PAGE 1 — Summary
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── PAGE 1 ────────────────────────────────────────────────────────────────
     draw_header()
 
     # KPI tiles
@@ -391,9 +369,7 @@ def generate_pdf(data, account_name):
     c.line(M, dy, W-M, dy)
 
     # Left column — Top Reports + Top Authors
-    rh  = 6*mm
-    ty  = dy - 4*mm
-    y1  = ty
+    rh = 6*mm; ty = dy - 4*mm; y1 = ty
 
     c.setFillColor(PBLUE); c.rect(M, y1, CW, 5.5*mm, fill=1, stroke=0)
     c.setFont("Helvetica-Bold", 7.5); c.setFillColor(PWHITE)
@@ -410,7 +386,7 @@ def generate_pdf(data, account_name):
     for i, (a, v) in enumerate(data['top_authors'].items()):
         y1 = draw_table_row(M, y1, CW, i+1, a, f"{v:,}", i%2==1, rh)
 
-    # Right column — Top 10 Readers summary
+    # Right column — Top 10 readers summary
     rx = M + CW + 4*mm; rw = CW; y2 = ty
 
     c.setFillColor(PBLUE); c.rect(rx, y2, rw, 5.5*mm, fill=1, stroke=0)
@@ -418,9 +394,8 @@ def generate_pdf(data, account_name):
     c.drawString(rx+3*mm, y2+1.5*mm, f"MOST ACTIVE READERS  (Top 10 of {len(all_readers)})")
     y2 -= rh
 
-    # Sub-header
     c.setFont("Helvetica", 6); c.setFillColor(PMGREY)
-    c.drawString(rx+6*mm,        y2+1.8*mm, "Reader")
+    c.drawString(rx+6*mm,          y2+1.8*mm, "Reader")
     c.drawRightString(rx+rw-22*mm, y2+1.8*mm, "Email")
     c.drawRightString(rx+rw-11*mm, y2+1.8*mm, "Portal")
     c.drawRightString(rx+rw-1*mm,  y2+1.8*mm, "Total")
@@ -442,15 +417,12 @@ def generate_pdf(data, account_name):
         c.drawRightString(rx+rw-1*mm,  y2+1.8*mm, f"{int(row['Total']):,}")
         y2 -= rh
 
-    # Note pointing to next pages
     c.setFont("Helvetica-Oblique", 6.5); c.setFillColor(PMGREY)
     c.drawString(rx+1.5*mm, y2+1*mm, f"→ See pages 2–{total_pages} for complete reader list")
 
     draw_footer(1)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # PAGES 2+ — Complete Reader List (all readers, paginated)
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── PAGES 2+ — Complete reader list ──────────────────────────────────────
     full_rw = W - 2*M
     rh2     = 6.2*mm
 
@@ -468,11 +440,11 @@ def generate_pdf(data, account_name):
         c.drawRightString(W-M, H-13*mm, f"{account_name}  |  {data['date_min']} – {data['date_max']}")
         c.setFillColor(PRULE); c.rect(0, H-23*mm, W, 0.5*mm, fill=1, stroke=0)
 
-        # Table header row
+        # Table header
         ty2 = H - 30*mm
         c.setFillColor(PBLUE); c.rect(M, ty2, full_rw, 6*mm, fill=1, stroke=0)
         c.setFont("Helvetica-Bold", 7.5); c.setFillColor(PWHITE)
-        c.drawString(M+10*mm,             ty2+1.5*mm, "READER")
+        c.drawString(M+10*mm,              ty2+1.5*mm, "READER")
         c.drawRightString(M+full_rw-42*mm, ty2+1.5*mm, "EMAIL")
         c.drawRightString(M+full_rw-22*mm, ty2+1.5*mm, "PORTAL")
         c.drawRightString(M+full_rw-1*mm,  ty2+1.5*mm, "TOTAL")
@@ -520,12 +492,10 @@ if uploaded:
         st.markdown(
             f'<div class="quality-box"><strong>⚠️ Data Quality Notes</strong>'
             + ''.join(f'<div>• {i}</div>' for i in issues)
-            + '</div>',
-            unsafe_allow_html=True)
+            + '</div>', unsafe_allow_html=True)
 
     st.caption(f"Period: **{data['date_min']} — {data['date_max']}**  ·  Account: **{account_name}**  ·  {len(data['readers_all'])} readers total")
 
-    # KPI cards
     c1, c2, c3, c4, c5 = st.columns(5)
     for col, lbl, val, ac in [
         (c1, "Total Opens",    f"{data['total_opens']:,}",    C_BLUE),
@@ -537,8 +507,6 @@ if uploaded:
         with col: st.markdown(kpi_card(lbl, val, ac), unsafe_allow_html=True)
 
     st.markdown("")
-
-    # Rankings
     st.markdown('<div class="sec-title">Rankings</div>', unsafe_allow_html=True)
     t1, t2, t3 = st.columns(3)
     with t1:
@@ -555,7 +523,6 @@ if uploaded:
         st.markdown(f"**Most Active Readers** *(top 10 of {len(data['readers_all'])})*")
         st.markdown(render_readers(data['readers_top']), unsafe_allow_html=True)
 
-    # Download
     st.markdown("---")
     st.info(f"📄 PDF includes charts + complete list of all {len(data['readers_all'])} readers.")
     dl, _ = st.columns([1, 3])
