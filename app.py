@@ -234,15 +234,20 @@ def make_channel_chart(data):
     ax.set_xticks(x); ax.set_xticklabels(categories, fontsize=7.5, color='#333')
 
     mx = max(vals) or 1
+    # Give enough headroom for value labels AND channel labels
+    ax.set_ylim(0, mx * 1.35)
+
+    # Value annotations just above each bar
     for xi, v in zip(x, vals):
         if v > 0:
-            ax.text(xi, v + mx*0.02, f'{v:,}', ha='center', va='bottom',
+            ax.text(xi, v + mx * 0.03, f'{v:,}', ha='center', va='bottom',
                     fontsize=7, color='#333', fontweight='bold')
 
+    # Channel labels at the very top — well above annotations
     ax.axvline(x=0.5, color='#D0DCE8', linewidth=1, linestyle='--', zorder=2)
-    ax.text(0,   ax.get_ylim()[1]*0.96, 'Email',  ha='center',
+    ax.text(0,   mx * 1.27, 'Email',  ha='center',
             fontsize=7, color='#0077C8', fontweight='bold')
-    ax.text(2.0, ax.get_ylim()[1]*0.96, 'Portal', ha='center',
+    ax.text(2.0, mx * 1.27, 'Portal', ha='center',
             fontsize=7, color='#005A96', fontweight='bold')
 
     ax.set_title('Engagement by Channel & Event Type', fontsize=9,
@@ -312,13 +317,14 @@ def generate_pdf(data, account_name):
             c.drawImage(LOGO_PATH, M, H-34*mm, width=54*mm, height=24*mm,
                         preserveAspectRatio=True, mask='auto')
         c.setFont("Helvetica-Bold", 15); c.setFillColor(PDARK)
-        c.drawRightString(W-M, H-17*mm, "Readership Analytics Report")
-        c.setFont("Helvetica-Bold", 9); c.setFillColor(PBLUE)
-        c.drawRightString(W-M, H-24*mm,
-                          f"{account_name}  |  {data['date_min']} – {data['date_max']}")
-        c.setFont("Helvetica", 7.5); c.setFillColor(PMGREY)
-        c.drawRightString(W-M, H-30*mm,
-                          f"Generated {datetime.now().strftime('%d %b %Y')}")
+        c.drawRightString(W-M, H-15*mm, "Readership Analytics Report")
+        # Account name — prominent, own line
+        c.setFont("Helvetica-Bold", 11); c.setFillColor(PBLUE)
+        c.drawRightString(W-M, H-23*mm, account_name)
+        # Date range below account name
+        c.setFont("Helvetica", 8); c.setFillColor(PMGREY)
+        c.drawRightString(W-M, H-29*mm,
+                          f"{data['date_min']} – {data['date_max']}  |  Generated {datetime.now().strftime('%d %b %Y')}")
         c.setFillColor(PRULE); c.rect(0, H-39*mm, W, 0.5*mm, fill=1, stroke=0)
 
     def draw_footer(page_num):
