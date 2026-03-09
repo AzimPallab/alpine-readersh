@@ -1,6 +1,14 @@
 """
-Alpine Macro — Readership Analytics Web App v5
+Alpine Macro — Readership Analytics Web App v6
 Run with: streamlit run app.py
+
+Metric changes from v5:
+- Email: initial_open (reach) + open (re-opens) tracked separately. Clicks removed.
+- Portal: OpenLandingPage (views) + OpenChapter (deep reads) + DownloadProduct (downloads)
+- Most Active Readers: initial_open + open + OpenLandingPage + OpenChapter combined
+- Top Reports: email initial_open only
+- Top Authors: email initial_open only
+- Donut chart: email initial_open by Leaf product (unchanged)
 """
 
 import streamlit as st
@@ -29,7 +37,7 @@ def get_logo_b64():
     return None
 
 logo_b64  = get_logo_b64()
-logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height:44px;">' if logo_b64 else "<strong>ALPINE MACRO</strong>"
+logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height:64px;">' if logo_b64 else "<strong>ALPINE MACRO</strong>"
 
 C_BLUE  = "#0077C8"
 C_DARK  = "#2B2B2B"
@@ -42,11 +50,12 @@ st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;600&family=DM+Sans:wght@300;400;500;600&display=swap');
 html, body, [class*="css"] {{ font-family: 'DM Sans', sans-serif; background: {C_LGREY}; }}
-.am-nav {{ background:#fff; border-bottom:3px solid {C_BLUE}; padding:14px 28px; display:flex; align-items:center; justify-content:space-between; margin-bottom:28px; }}
+.am-nav {{ background:#fff; border-bottom:3px solid {C_BLUE}; padding:16px 28px; display:flex; align-items:center; justify-content:space-between; margin-bottom:28px; }}
 .am-nav-right {{ font-size:0.72rem; color:#888; text-transform:uppercase; letter-spacing:0.1em; font-weight:500; }}
 .kpi-card {{ background:#fff; border-radius:10px; padding:16px 14px 12px; border-left:4px solid var(--ac); box-shadow:0 1px 4px rgba(0,119,200,0.08); }}
 .kpi-val {{ font-family:'Source Serif 4',serif; font-size:1.9rem; font-weight:600; color:{C_DARK}; line-height:1; margin-bottom:4px; }}
 .kpi-lbl {{ font-size:0.68rem; color:#6B6B6B; text-transform:uppercase; letter-spacing:0.07em; font-weight:500; }}
+.kpi-sub {{ font-size:0.65rem; color:#999; margin-top:2px; }}
 .sec-title {{ font-family:'Source Serif 4',serif; font-size:1.05rem; font-weight:600; color:{C_BLUE}; border-bottom:2px solid {C_BLUE}; padding-bottom:5px; margin:20px 0 12px; display:inline-block; }}
 .tbl-wrap {{ background:#fff; border-radius:10px; padding:14px 16px; box-shadow:0 1px 4px rgba(0,119,200,0.06); }}
 .tbl-hdr {{ display:flex; gap:4px; font-size:0.68rem; font-weight:600; color:#aaa; text-transform:uppercase; letter-spacing:0.06em; padding-bottom:6px; border-bottom:1px solid {C_RULE}; margin-bottom:2px; }}
@@ -62,11 +71,14 @@ div[data-testid="stFileUploader"] {{ border:2px dashed {C_BLUE} !important; bord
 .dl-btn > button {{ background:{C_DARK} !important; color:#fff !important; border:none !important; border-radius:8px !important; font-weight:600 !important; font-size:0.9rem !important; padding:0.55rem 2rem !important; width:100%; transition:background 0.2s; }}
 .dl-btn > button:hover {{ background:{C_BLUE} !important; }}
 .chip {{ display:inline-block; background:{C_LBLUE}; color:{C_BLUE}; border-radius:20px; padding:2px 10px; font-size:0.72rem; font-weight:500; margin:2px; }}
+.section-divider {{ border:none; border-top:2px solid {C_RULE}; margin:24px 0 8px; }}
+.channel-label {{ font-size:0.7rem; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:#888; margin-bottom:6px; }}
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown(f'<div class="am-nav">{logo_html}<span class="am-nav-right">Readership Analytics</span></div>', unsafe_allow_html=True)
 
+# ── Column aliases ─────────────────────────────────────────────────────────────
 REQUIRED = ['Contact Name','Contact Email','EventSource','EventAction','EventDate','Report Title','Authors','Leaf product']
 ALIASES  = {
     'contact name':'Contact Name', 'name':'Contact Name',
@@ -79,6 +91,21 @@ ALIASES  = {
     'leaf product':'Leaf product', 'product':'Leaf product', 'category':'Leaf product',
 }
 
+# ── Event action constants ─────────────────────────────────────────────────────
+# Email
+EA_EMAIL_REACH   = 'initial_open'       # first open — reach metric
+EA_EMAIL_REOPEN  = 'open'               # subsequent opens — re-engagement
+
+# Portal (My Oxford)
+EA_PORTAL_VIEW   = 'openlandingpage'    # viewed licensed product page — portal reach
+EA_PORTAL_READ   = 'openchapter'        # read content inside report — deep engagement
+EA_PORTAL_DL     = 'downloadproduct'    # downloaded report
+
+# Sources
+SRC_EMAIL  = 'email'
+SRC_PORTAL = ['my oxford', 'myoxford', 'portal']
+
+# ── Data loading & cleaning ────────────────────────────────────────────────────
 def load_clean(file_bytes, filename):
     issues = []
     try:
@@ -86,6 +113,7 @@ def load_clean(file_bytes, filename):
     except Exception as e:
         st.error(f"Could not read file: {e}"); st.stop()
 
+    # Normalise column names
     df.columns = df.columns.str.strip()
     rmap = {c: ALIASES[c.lower().strip()] for c in df.columns
             if c.lower().strip() in ALIASES and ALIASES[c.lower().strip()] not in df.columns}
@@ -97,33 +125,41 @@ def load_clean(file_bytes, filename):
     if missing:
         st.error(f"Missing required columns: {', '.join(missing)}"); st.stop()
 
+    # Drop fully blank rows
     before = len(df)
     df = df.dropna(how='all')
     if before - len(df):
         issues.append(f"Removed {before - len(df)} blank rows")
 
+    # Clean text fields — strip whitespace and null-like strings
     for col in ['Contact Name','Contact Email','EventAction','EventSource','Report Title','Authors','Leaf product']:
         df[col] = df[col].astype(str).str.strip()
         df[col] = df[col].replace({'nan':'', 'NaN':'', 'NULL':'', 'none':'', 'None':''})
         df[col] = df[col].replace('', None)
 
+    # Drop rows missing critical fields
     before = len(df)
     df = df.dropna(subset=['Contact Name','Contact Email','Report Title','EventAction','EventDate'])
     if before - len(df):
         issues.append(f"Removed {before - len(df)} rows with missing critical fields")
 
+    # Normalise event fields to lowercase
     df['EventAction'] = df['EventAction'].str.lower().str.strip()
     df['EventSource']  = df['EventSource'].str.lower().str.strip()
 
+    # Parse dates
     df['EventDate'] = pd.to_datetime(df['EventDate'], errors='coerce', infer_datetime_format=True)
     bad = df['EventDate'].isna().sum()
     if bad:
         issues.append(f"Removed {bad} rows with unparseable dates")
         df = df.dropna(subset=['EventDate'])
 
-    df = df[~df['EventAction'].isin(['login'])]
+    # Filter out login and auth events
+    login_actions  = ['login', 'loginfederatedidentity', 'loginipaddress', 'logout', 'ssogeorestriction']
+    df = df[~df['EventAction'].isin(login_actions)]
     df = df[~df['EventSource'].isin(['login.oxfordeconomics.com'])]
 
+    # Deduplicate: same reader + action + report + date = one event
     before = len(df)
     df = df.drop_duplicates(subset=['Contact Email','EventAction','Report Title','EventDate'])
     if before - len(df):
@@ -132,82 +168,109 @@ def load_clean(file_bytes, filename):
     df['Month'] = df['EventDate'].dt.to_period('M')
     return df, issues
 
+# ── Analysis ───────────────────────────────────────────────────────────────────
 def analyse(df):
-    opens  = df[df['EventAction'] == 'initial_open']
-    clicks = df[df['EventAction'] == 'click']
+    # ── Email segments ─────────────────────────────────────────────────────────
+    email_df     = df[df['EventSource'] == SRC_EMAIL]
+    email_reach  = email_df[email_df['EventAction'] == EA_EMAIL_REACH]   # initial_open
+    email_reopen = email_df[email_df['EventAction'] == EA_EMAIL_REOPEN]  # open
 
-    email_op  = opens[opens['EventSource'] == 'email']
-    portal_op = opens[opens['EventSource'].isin(['my oxford','myoxford','portal'])]
-    email_cl  = clicks[clicks['EventSource'] == 'email']
-    portal_cl = clicks[clicks['EventSource'].isin(['my oxford','myoxford','portal'])]
+    # ── Portal segments ────────────────────────────────────────────────────────
+    portal_df    = df[df['EventSource'].isin(SRC_PORTAL)]
+    portal_views = portal_df[portal_df['EventAction'] == EA_PORTAL_VIEW]  # OpenLandingPage
+    portal_reads = portal_df[portal_df['EventAction'] == EA_PORTAL_READ]  # OpenChapter
+    portal_dls   = portal_df[portal_df['EventAction'] == EA_PORTAL_DL]    # DownloadProduct
 
+    # ── Top products — email reach (initial_open), drop blank ──────────────────
     top_products = (
-        email_op[email_op['Leaf product'].notna()]
-        ['Leaf product'].str.strip().value_counts().head(6)
+        email_reach[email_reach['Leaf product'].notna()]
+        ['Leaf product'].str.strip().value_counts().head(8)
     )
-    top_reports = (
-        email_op[email_op['Report Title'].notna()]
-        ['Report Title'].str.strip().value_counts().head(5)
-    )
+
+    # ── Top reports — email initial_open + portal OpenLandingPage combined ───
+    reports_combined = pd.concat([
+        email_reach[email_reach['Report Title'].notna()][['Report Title']],
+        portal_views[portal_views['Report Title'].notna()][['Report Title']],
+    ])
+    top_reports = reports_combined['Report Title'].str.strip().value_counts().head(5)
+
+    # ── Top authors — email initial_open only ─────────────────────────────────
     top_authors = (
-        email_op[email_op['Authors'].notna()]
+        email_reach[email_reach['Authors'].notna()]
         ['Authors'].str.strip().value_counts().head(5)
     )
 
-    e_reads = email_op.groupby('Contact Name').size().rename('Email Opens')
-    p_reads = portal_op.groupby('Contact Name').size().rename('Portal Opens')
-    readers = pd.DataFrame({'Email Opens': e_reads, 'Portal Opens': p_reads}).fillna(0).astype(int)
-    readers['Total'] = readers['Email Opens'] + readers['Portal Opens']
+    # ── Most Active Readers ────────────────────────────────────────────────────
+    # Columns: Email Reach (initial_open) | Email Re-opens (open) |
+    #          Portal Views (OpenLandingPage) | Portal Reads (OpenChapter) | Total
+    e_reach_cnt  = email_reach.groupby('Contact Name').size().rename('Email Reach')
+    e_reopen_cnt = email_reopen.groupby('Contact Name').size().rename('Email Re-opens')
+    p_view_cnt   = portal_views.groupby('Contact Name').size().rename('Portal Views')
+    p_read_cnt   = portal_reads.groupby('Contact Name').size().rename('Portal Deep Reads')
+
+    readers = pd.concat([e_reach_cnt, e_reopen_cnt, p_view_cnt, p_read_cnt], axis=1).fillna(0).astype(int)
+    readers['Total'] = readers['Email Reach'] + readers['Email Re-opens'] + readers['Portal Views'] + readers['Portal Deep Reads']
     readers_all = readers.sort_values('Total', ascending=False).reset_index()
     readers_top = readers_all.head(10).reset_index(drop=True)
 
-    total_opens = len(opens)
+    # ── Unique readers — anyone with at least one reach/view/read event ────────
+    all_engaged = pd.concat([email_reach, email_reopen, portal_views, portal_reads])
+    unique_readers = all_engaged['Contact Name'].nunique()
 
     return {
-        'date_min':        df['EventDate'].min().strftime('%d %b %Y'),
-        'date_max':        df['EventDate'].max().strftime('%d %b %Y'),
-        'total_opens':     total_opens,
-        'unique_readers':  opens['Contact Name'].nunique(),
-        'total_clicks':    len(clicks),
-        'total_downloads': len(df[df['EventAction'] == 'downloadproduct']),
-        'click_rate':      round(len(clicks) / total_opens * 100, 1) if total_opens else 0,
-        'email_opens':     len(email_op),
-        'email_clicks':    len(email_cl),
-        'portal_opens':    len(portal_op),
-        'portal_clicks':   len(portal_cl),
-        'top_products':    top_products,
-        'top_reports':     top_reports,
-        'top_authors':     top_authors,
-        'readers_top':     readers_top,
-        'readers_all':     readers_all,
+        'date_min':           df['EventDate'].min().strftime('%d %b %Y'),
+        'date_max':           df['EventDate'].max().strftime('%d %b %Y'),
+        # Email KPIs
+        'email_reach':        len(email_reach),          # initial_open count
+        'email_reach_unique': email_reach['Contact Name'].nunique(),
+        'email_reopens':      len(email_reopen),         # open count
+        # Portal KPIs
+        'portal_views':       len(portal_views),         # OpenLandingPage
+        'portal_views_unique':portal_views['Contact Name'].nunique(),
+        'portal_reads':       len(portal_reads),         # OpenChapter
+        'portal_downloads':   len(portal_dls),           # DownloadProduct
+        # Summary
+        'unique_readers':     unique_readers,
+        # Rankings
+        'top_products':       top_products,
+        'top_reports':        top_reports,
+        'top_authors':        top_authors,
+        'readers_top':        readers_top,
+        'readers_all':        readers_all,
     }
 
+# ── Charts (PDF only) ──────────────────────────────────────────────────────────
 def make_channel_chart(data):
-    fig, ax = plt.subplots(figsize=(5.5, 2.4))
-    categories  = ['Opens', 'Clicks']
-    email_vals  = [data['email_opens'],  data['email_clicks']]
-    portal_vals = [data['portal_opens'], data['portal_clicks']]
-    x, bw = np.arange(2), 0.32
+    fig, ax = plt.subplots(figsize=(5.5, 2.6))
 
-    ax.bar(x - bw/2, email_vals,  bw, color='#0077C8', zorder=3, label='Email')
-    ax.bar(x + bw/2, portal_vals, bw, color='#80C4ED', zorder=3, label='Portal')
+    categories  = ['Email\nReach', 'Email\nRe-opens', 'Portal\nViews', 'Portal\nDeep Reads', 'Portal\nDownloads']
+    vals        = [data['email_reach'], data['email_reopens'],
+                   data['portal_views'], data['portal_reads'], data['portal_downloads']]
+    bar_colors  = [CHART_COLORS[0], CHART_COLORS[2], CHART_COLORS[1], CHART_COLORS[3], CHART_COLORS[4]]
+
+    x = np.arange(len(categories))
+    bars = ax.bar(x, vals, color=bar_colors, zorder=3, width=0.55)
 
     ax.set_facecolor('none'); fig.patch.set_alpha(0)
     ax.yaxis.grid(True, color='#CBD2DA', linewidth=0.5, zorder=0); ax.set_axisbelow(True)
     for s in ['top','right','left']: ax.spines[s].set_visible(False)
     ax.spines['bottom'].set_color('#E0E8F0')
     ax.tick_params(axis='y', labelsize=7, colors='#555')
-    ax.set_xticks(x); ax.set_xticklabels(categories, fontsize=9, color='#333', fontweight='500')
+    ax.set_xticks(x); ax.set_xticklabels(categories, fontsize=7.5, color='#333')
 
-    mx = max(email_vals + portal_vals) or 1
-    for vals, offset in [(email_vals, -bw/2), (portal_vals, bw/2)]:
-        for xi, v in zip(x + offset, vals):
-            if v > 0:
-                ax.text(xi, v + mx * 0.02, f'{v:,}', ha='center', va='bottom',
-                        fontsize=7, color='#333', fontweight='bold')
+    mx = max(vals) or 1
+    for xi, v in zip(x, vals):
+        if v > 0:
+            ax.text(xi, v + mx * 0.02, f'{v:,}', ha='center', va='bottom',
+                    fontsize=7, color='#333', fontweight='bold')
 
-    ax.legend(fontsize=7.5, frameon=False, loc='upper right')
-    ax.set_title('Email vs Portal Activity', fontsize=9, color='#2B2B2B', pad=8, fontweight='bold', loc='left')
+    # Channel separator line
+    ax.axvline(x=1.5, color='#D0DCE8', linewidth=1, linestyle='--', zorder=2)
+    ax.text(0.5, ax.get_ylim()[1]*0.95, 'Email', ha='center', fontsize=7, color='#0077C8', fontweight='bold')
+    ax.text(3.0, ax.get_ylim()[1]*0.95, 'Portal', ha='center', fontsize=7, color='#005A96', fontweight='bold')
+
+    ax.set_title('Engagement by Channel & Event Type', fontsize=9, color='#2B2B2B',
+                 pad=8, fontweight='bold', loc='left')
     fig.tight_layout(pad=0.5)
     return fig
 
@@ -232,11 +295,12 @@ def make_donut(top_products):
     ax.legend(handles=patches, loc='lower center', bbox_to_anchor=(0.5, -0.48),
               fontsize=7.2, frameon=False, ncol=1, labelspacing=0.55,
               handlelength=1.2, handleheight=0.9)
-    ax.set_title('Opens by Product Category', fontsize=9, color='#2B2B2B',
+    ax.set_title('Email Reach by Product Category', fontsize=9, color='#2B2B2B',
                  pad=8, fontweight='bold', loc='left')
     fig.tight_layout(pad=0.8)
     return fig
 
+# ── Web table renderers ────────────────────────────────────────────────────────
 def render_simple(rows, cols):
     hdr = '<div class="tbl-hdr">' + ''.join([
         '<span class="t-rank">#</span>' if i == 0 else
@@ -255,8 +319,10 @@ def render_readers(readers_df):
     hdr = ('<div class="tbl-hdr">'
            '<span class="t-rank">#</span>'
            '<span class="t-name">Reader</span>'
-           '<span class="t-sub">Email</span>'
-           '<span class="t-sub">Portal</span>'
+           '<span class="t-sub">📧 Reach</span>'
+           '<span class="t-sub">📧 Re-opens</span>'
+           '<span class="t-sub">🌐 Views</span>'
+           '<span class="t-sub">🌐 Reads</span>'
            '<span class="t-num">Total</span>'
            '</div>')
     body = ''
@@ -264,24 +330,30 @@ def render_readers(readers_df):
         body += (f'<div class="tbl-row">'
                  f'<span class="t-rank">{rank}</span>'
                  f'<span class="t-name">{row["Contact Name"]}</span>'
-                 f'<span class="t-sub">{int(row["Email Opens"]):,}</span>'
-                 f'<span class="t-sub">{int(row["Portal Opens"]):,}</span>'
+                 f'<span class="t-sub">{int(row["Email Reach"]):,}</span>'
+                 f'<span class="t-sub">{int(row["Email Re-opens"]):,}</span>'
+                 f'<span class="t-sub">{int(row["Portal Views"]):,}</span>'
+                 f'<span class="t-sub">{int(row["Portal Deep Reads"]):,}</span>'
                  f'<span class="t-num">{int(row["Total"]):,}</span>'
                  f'</div>')
     return f'<div class="tbl-wrap">{hdr}{body}</div>'
 
-def kpi_card(label, value, ac):
+def kpi_card(label, value, ac, sub=None):
+    sub_html = f'<div class="kpi-sub">{sub}</div>' if sub else ''
     return (f'<div class="kpi-card" style="--ac:{ac}">'
             f'<div class="kpi-val">{value}</div>'
             f'<div class="kpi-lbl">{label}</div>'
+            f'{sub_html}'
             f'</div>')
 
+# ── PDF constants ──────────────────────────────────────────────────────────────
 PBLUE  = colors.HexColor("#0077C8")
 PDARK  = colors.HexColor("#2B2B2B")
 PLBLU  = colors.HexColor("#F0F7FD")
 PRULE  = colors.HexColor("#D0DCE8")
 PWHITE = colors.white
 PMGREY = colors.HexColor("#999999")
+PNBLUE = colors.HexColor("#005A96")
 
 def fig_to_ir(fig):
     buf = io.BytesIO()
@@ -289,6 +361,7 @@ def fig_to_ir(fig):
     buf.seek(0); plt.close(fig)
     return ImageReader(buf)
 
+# ── PDF generation ─────────────────────────────────────────────────────────────
 def generate_pdf(data, account_name):
     buf = io.BytesIO()
     W, H = A4
@@ -296,10 +369,10 @@ def generate_pdf(data, account_name):
     M  = 12 * mm
     CW = (W - 2*M - 4*mm) / 2
 
-    all_readers   = data['readers_all']
-    ROWS_PER_PAGE = 38
-    reader_pages  = max(1, -(-len(all_readers) // ROWS_PER_PAGE))
-    total_pages   = 1 + reader_pages
+    all_readers    = data['readers_all']
+    ROWS_PER_PAGE  = 38
+    reader_pages   = max(1, -(-len(all_readers) // ROWS_PER_PAGE))
+    total_pages    = 1 + reader_pages
 
     def draw_header():
         c.setFillColor(PWHITE); c.rect(0, H-38*mm, W, 38*mm, fill=1, stroke=0)
@@ -331,49 +404,67 @@ def generate_pdf(data, account_name):
         c.setFont("Helvetica", 7); c.setFillColor(PDARK)
         short = label[:max_chars] + '...' if len(label) > max_chars else label
         c.drawString(x+6*mm, y+1.8*mm, short)
-        c.setFont("Helvetica-Bold", 7); c.setFillColor(colors.HexColor("#005A96"))
+        c.setFont("Helvetica-Bold", 7); c.setFillColor(PNBLUE)
         c.drawRightString(x+w-1*mm, y+1.8*mm, str(val))
         return y - rh
 
-    # ── PAGE 1 ────────────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGE 1 — Summary
+    # ══════════════════════════════════════════════════════════════════════════
     draw_header()
 
-    # KPI tiles
+    # ── KPI tiles: 3 Email + 3 Portal ─────────────────────────────────────────
     kpis = [
-        ("Total Opens",    f"{data['total_opens']:,}",    PBLUE),
-        ("Unique Readers", f"{data['unique_readers']:,}", PDARK),
-        ("Clicks",         f"{data['total_clicks']:,}",   colors.HexColor("#005A96")),
-        ("Click Rate",     f"{data['click_rate']}%",      colors.HexColor("#33A1E0")),
-        ("Downloads",      f"{data['total_downloads']:,}", PMGREY),
+        ("Email Reach",       f"{data['email_reach']:,}",        PBLUE,  "initial_open events"),
+        ("Email Re-opens",    f"{data['email_reopens']:,}",       colors.HexColor("#33A1E0"), "open events"),
+        ("Unique Readers",    f"{data['unique_readers']:,}",      PDARK,  "all channels"),
+        ("Portal Views",      f"{data['portal_views']:,}",        PNBLUE, "OpenLandingPage"),
+        ("Portal Deep Reads", f"{data['portal_reads']:,}",        colors.HexColor("#80C4ED"), "OpenChapter"),
+        ("Portal Downloads",  f"{data['portal_downloads']:,}",    PMGREY, "DownloadProduct"),
     ]
-    bw = (W - 2*M) / len(kpis); by = H-59*mm; bh = 16*mm
-    for i, (lbl, val, col) in enumerate(kpis):
+    bw = (W - 2*M) / len(kpis); by = H-59*mm; bh = 17*mm
+    for i, (lbl, val, col, hint) in enumerate(kpis):
         bx = M + i * bw
         c.setFillColor(PLBLU); c.roundRect(bx, by, bw-1.5*mm, bh, 3, fill=1, stroke=0)
         c.setFillColor(col);   c.rect(bx, by, 2*mm, bh, fill=1, stroke=0)
-        c.setFont("Helvetica-Bold", 13); c.setFillColor(PDARK)
-        c.drawCentredString(bx+2*mm+(bw-3.5*mm)/2, by+6.5*mm, val)
-        c.setFont("Helvetica", 6.5); c.setFillColor(colors.HexColor("#666666"))
-        c.drawCentredString(bx+2*mm+(bw-3.5*mm)/2, by+2.5*mm, lbl.upper())
+        c.setFont("Helvetica-Bold", 12); c.setFillColor(PDARK)
+        c.drawCentredString(bx+2*mm+(bw-3.5*mm)/2, by+8*mm, val)
+        c.setFont("Helvetica", 6); c.setFillColor(colors.HexColor("#666666"))
+        c.drawCentredString(bx+2*mm+(bw-3.5*mm)/2, by+4*mm, lbl.upper())
+        c.setFont("Helvetica-Oblique", 5.5); c.setFillColor(PMGREY)
+        c.drawCentredString(bx+2*mm+(bw-3.5*mm)/2, by+1.5*mm, hint)
 
-    # Charts
-    cy = H - 122*mm
+    # ── Channel separator label ────────────────────────────────────────────────
+    sep_y = by - 4*mm
+    # Email bracket
+    c.setFillColor(PBLUE); c.rect(M, sep_y, bw*2-1.5*mm, 0.8*mm, fill=1, stroke=0)
+    c.setFont("Helvetica-Bold", 6.5); c.setFillColor(PBLUE)
+    c.drawString(M+1*mm, sep_y-3.5*mm, "📧  EMAIL CHANNEL")
+    # Portal bracket
+    c.setFillColor(PNBLUE); c.rect(M+bw*3, sep_y, bw*3-1.5*mm, 0.8*mm, fill=1, stroke=0)
+    c.setFont("Helvetica-Bold", 6.5); c.setFillColor(PNBLUE)
+    c.drawString(M+bw*3+1*mm, sep_y-3.5*mm, "🌐  PORTAL CHANNEL")
+
+    # ── Charts ────────────────────────────────────────────────────────────────
+    cy = H - 126*mm
     c.drawImage(fig_to_ir(make_channel_chart(data)), M, cy,
-                width=105*mm, height=54*mm, preserveAspectRatio=True, mask='auto')
-    c.drawImage(fig_to_ir(make_donut(data['top_products'])), M+109*mm, cy-14*mm,
-                width=76*mm, height=70*mm, preserveAspectRatio=True, mask='auto')
+                width=108*mm, height=52*mm, preserveAspectRatio=True, mask='auto')
+    c.drawImage(fig_to_ir(make_donut(data['top_products'])), M+112*mm, cy-14*mm,
+                width=74*mm, height=68*mm, preserveAspectRatio=True, mask='auto')
 
-    # Divider
+    # ── Divider ───────────────────────────────────────────────────────────────
     dy = cy - 8*mm
     c.setStrokeColor(PRULE); c.setLineWidth(0.5)
     c.line(M, dy, W-M, dy)
 
-    # Left column — Top Reports + Top Authors
-    rh = 6*mm; ty = dy - 4*mm; y1 = ty
+    rh  = 6*mm
+    ty  = dy - 4*mm
+    y1  = ty
 
+    # ── Left column — Top Reports + Top Authors ───────────────────────────────
     c.setFillColor(PBLUE); c.rect(M, y1, CW, 5.5*mm, fill=1, stroke=0)
     c.setFont("Helvetica-Bold", 7.5); c.setFillColor(PWHITE)
-    c.drawString(M+3*mm, y1+1.5*mm, "TOP REPORTS BY OPENS")
+    c.drawString(M+3*mm, y1+1.5*mm, "TOP REPORTS  (Email Reach + Portal Views)")
     y1 -= rh
     for i, (t, v) in enumerate(data['top_reports'].items()):
         y1 = draw_table_row(M, y1, CW, i+1, t, f"{v:,}", i%2==1, rh)
@@ -381,12 +472,12 @@ def generate_pdf(data, account_name):
     y1 -= 2.5*mm
     c.setFillColor(PBLUE); c.rect(M, y1, CW, 5.5*mm, fill=1, stroke=0)
     c.setFont("Helvetica-Bold", 7.5); c.setFillColor(PWHITE)
-    c.drawString(M+3*mm, y1+1.5*mm, "TOP AUTHORS BY OPENS")
+    c.drawString(M+3*mm, y1+1.5*mm, "TOP AUTHORS  (Email Reach)")
     y1 -= rh
     for i, (a, v) in enumerate(data['top_authors'].items()):
         y1 = draw_table_row(M, y1, CW, i+1, a, f"{v:,}", i%2==1, rh)
 
-    # Right column — Top 10 readers summary
+    # ── Right column — Top 10 Readers ────────────────────────────────────────
     rx = M + CW + 4*mm; rw = CW; y2 = ty
 
     c.setFillColor(PBLUE); c.rect(rx, y2, rw, 5.5*mm, fill=1, stroke=0)
@@ -394,11 +485,13 @@ def generate_pdf(data, account_name):
     c.drawString(rx+3*mm, y2+1.5*mm, f"MOST ACTIVE READERS  (Top 10 of {len(all_readers)})")
     y2 -= rh
 
-    c.setFont("Helvetica", 6); c.setFillColor(PMGREY)
+    # Sub-header
+    c.setFont("Helvetica", 5.5); c.setFillColor(PMGREY)
     c.drawString(rx+6*mm,          y2+1.8*mm, "Reader")
-    c.drawRightString(rx+rw-22*mm, y2+1.8*mm, "Email")
-    c.drawRightString(rx+rw-11*mm, y2+1.8*mm, "Portal")
-    c.drawRightString(rx+rw-1*mm,  y2+1.8*mm, "Total")
+    c.drawRightString(rx+rw-34*mm, y2+1.8*mm, "📧Reach")
+    c.drawRightString(rx+rw-24*mm, y2+1.8*mm, "📧Re-op")
+    c.drawRightString(rx+rw-14*mm, y2+1.8*mm, "🌐Views")
+    c.drawRightString(rx+rw-4*mm,  y2+1.8*mm, "Total")
     y2 -= rh
 
     for rank, (_, row) in enumerate(data['readers_top'].iterrows(), start=1):
@@ -407,14 +500,15 @@ def generate_pdf(data, account_name):
             c.setFillColor(PLBLU); c.rect(rx, y2, rw, rh-0.5*mm, fill=1, stroke=0)
         c.setFont("Helvetica-Bold", 7); c.setFillColor(PBLUE)
         c.drawString(rx+1.5*mm, y2+1.8*mm, str(rank))
-        c.setFont("Helvetica", 7); c.setFillColor(PDARK)
+        c.setFont("Helvetica", 6.5); c.setFillColor(PDARK)
         name = row['Contact Name']
-        c.drawString(rx+6*mm, y2+1.8*mm, name[:28]+'...' if len(name)>28 else name)
-        c.setFont("Helvetica", 6.5); c.setFillColor(colors.HexColor("#555555"))
-        c.drawRightString(rx+rw-22*mm, y2+1.8*mm, f"{int(row['Email Opens']):,}")
-        c.drawRightString(rx+rw-11*mm, y2+1.8*mm, f"{int(row['Portal Opens']):,}")
-        c.setFont("Helvetica-Bold", 7); c.setFillColor(colors.HexColor("#005A96"))
-        c.drawRightString(rx+rw-1*mm,  y2+1.8*mm, f"{int(row['Total']):,}")
+        c.drawString(rx+6*mm, y2+1.8*mm, name[:24]+'...' if len(name)>24 else name)
+        c.setFont("Helvetica", 6); c.setFillColor(colors.HexColor("#555555"))
+        c.drawRightString(rx+rw-34*mm, y2+1.8*mm, f"{int(row['Email Reach']):,}")
+        c.drawRightString(rx+rw-24*mm, y2+1.8*mm, f"{int(row['Email Re-opens']):,}")
+        c.drawRightString(rx+rw-14*mm, y2+1.8*mm, f"{int(row['Portal Views']):,}")
+        c.setFont("Helvetica-Bold", 7); c.setFillColor(PNBLUE)
+        c.drawRightString(rx+rw-4*mm,  y2+1.8*mm, f"{int(row['Total']):,}")
         y2 -= rh
 
     c.setFont("Helvetica-Oblique", 6.5); c.setFillColor(PMGREY)
@@ -422,7 +516,9 @@ def generate_pdf(data, account_name):
 
     draw_footer(1)
 
-    # ── PAGES 2+ — Complete reader list ──────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGES 2+ — Complete Reader List
+    # ══════════════════════════════════════════════════════════════════════════
     full_rw = W - 2*M
     rh2     = 6.2*mm
 
@@ -440,13 +536,14 @@ def generate_pdf(data, account_name):
         c.drawRightString(W-M, H-13*mm, f"{account_name}  |  {data['date_min']} – {data['date_max']}")
         c.setFillColor(PRULE); c.rect(0, H-23*mm, W, 0.5*mm, fill=1, stroke=0)
 
-        # Table header
+        # Table header row
         ty2 = H - 30*mm
         c.setFillColor(PBLUE); c.rect(M, ty2, full_rw, 6*mm, fill=1, stroke=0)
-        c.setFont("Helvetica-Bold", 7.5); c.setFillColor(PWHITE)
+        c.setFont("Helvetica-Bold", 7); c.setFillColor(PWHITE)
         c.drawString(M+10*mm,              ty2+1.5*mm, "READER")
-        c.drawRightString(M+full_rw-42*mm, ty2+1.5*mm, "EMAIL")
-        c.drawRightString(M+full_rw-22*mm, ty2+1.5*mm, "PORTAL")
+        c.drawRightString(M+full_rw-52*mm, ty2+1.5*mm, "EMAIL REACH")
+        c.drawRightString(M+full_rw-36*mm, ty2+1.5*mm, "RE-OPENS")
+        c.drawRightString(M+full_rw-20*mm, ty2+1.5*mm, "PORTAL VIEWS")
         c.drawRightString(M+full_rw-1*mm,  ty2+1.5*mm, "TOTAL")
 
         ry = ty2 - rh2
@@ -459,11 +556,12 @@ def generate_pdf(data, account_name):
             c.drawString(M+1.5*mm, ry+1.8*mm, str(global_rank))
             c.setFont("Helvetica", 7.5); c.setFillColor(PDARK)
             name = row['Contact Name']
-            c.drawString(M+10*mm, ry+1.8*mm, name[:55]+'...' if len(name)>55 else name)
+            c.drawString(M+10*mm, ry+1.8*mm, name[:50]+'...' if len(name)>50 else name)
             c.setFont("Helvetica", 7); c.setFillColor(colors.HexColor("#555555"))
-            c.drawRightString(M+full_rw-42*mm, ry+1.8*mm, f"{int(row['Email Opens']):,}")
-            c.drawRightString(M+full_rw-22*mm, ry+1.8*mm, f"{int(row['Portal Opens']):,}")
-            c.setFont("Helvetica-Bold", 7.5); c.setFillColor(colors.HexColor("#005A96"))
+            c.drawRightString(M+full_rw-52*mm, ry+1.8*mm, f"{int(row['Email Reach']):,}")
+            c.drawRightString(M+full_rw-36*mm, ry+1.8*mm, f"{int(row['Email Re-opens']):,}")
+            c.drawRightString(M+full_rw-20*mm, ry+1.8*mm, f"{int(row['Portal Views']):,}")
+            c.setFont("Helvetica-Bold", 7.5); c.setFillColor(PNBLUE)
             c.drawRightString(M+full_rw-1*mm,  ry+1.8*mm, f"{int(row['Total']):,}")
             ry -= rh2
 
@@ -492,50 +590,33 @@ if uploaded:
         st.markdown(
             f'<div class="quality-box"><strong>⚠️ Data Quality Notes</strong>'
             + ''.join(f'<div>• {i}</div>' for i in issues)
-            + '</div>', unsafe_allow_html=True)
+            + '</div>',
+            unsafe_allow_html=True)
 
-    st.caption(f"Period: **{data['date_min']} — {data['date_max']}**  ·  Account: **{account_name}**  ·  {len(data['readers_all'])} readers total")
+    # ── Summary line ──────────────────────────────────────────────────────────
+    st.markdown(
+        f'<div style="background:#fff;border-radius:10px;padding:14px 18px;'
+        f'border-left:4px solid {C_BLUE};box-shadow:0 1px 4px rgba(0,119,200,0.08);'
+        f'margin-bottom:20px;font-size:0.85rem;color:{C_DARK};">'
+        f'<strong style="font-size:1rem;color:{C_BLUE};">{account_name}</strong>'
+        f'&ensp;·&ensp;{data["date_min"]} — {data["date_max"]}'
+        f'&ensp;·&ensp;{len(data["readers_all"])} readers'
+        f'&ensp;·&ensp;{data["email_reach"]:,} email opens'
+        f'&ensp;·&ensp;{data["portal_views"]:,} portal views'
+        f'&ensp;·&ensp;{data["portal_downloads"]:,} downloads'
+        f'</div>',
+        unsafe_allow_html=True)
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    for col, lbl, val, ac in [
-        (c1, "Total Opens",    f"{data['total_opens']:,}",    C_BLUE),
-        (c2, "Unique Readers", f"{data['unique_readers']:,}", C_DARK),
-        (c3, "Clicks",         f"{data['total_clicks']:,}",   "#005A96"),
-        (c4, "Click Rate",     f"{data['click_rate']}%",      "#33A1E0"),
-        (c5, "Downloads",      f"{data['total_downloads']:,}", "#6B6B6B"),
-    ]:
-        with col: st.markdown(kpi_card(lbl, val, ac), unsafe_allow_html=True)
-
-    st.markdown("")
-    st.markdown('<div class="sec-title">Rankings</div>', unsafe_allow_html=True)
-    t1, t2, t3 = st.columns(3)
-    with t1:
-        st.markdown("**Top Reports**")
-        st.markdown(render_simple(
-            [(t, f"{v:,}") for t, v in data['top_reports'].items()],
-            ['#','Report','Opens']), unsafe_allow_html=True)
-    with t2:
-        st.markdown("**Top Authors**")
-        st.markdown(render_simple(
-            [(a, f"{v:,}") for a, v in data['top_authors'].items()],
-            ['#','Author','Opens']), unsafe_allow_html=True)
-    with t3:
-        st.markdown(f"**Most Active Readers** *(top 10 of {len(data['readers_all'])})*")
-        st.markdown(render_readers(data['readers_top']), unsafe_allow_html=True)
-
-    st.markdown("---")
-    st.info(f"📄 PDF includes charts + complete list of all {len(data['readers_all'])} readers.")
-    dl, _ = st.columns([1, 3])
-    with dl:
-        with st.spinner("Building PDF..."):
-            pdf_bytes = generate_pdf(data, account_name)
-        st.markdown('<div class="dl-btn">', unsafe_allow_html=True)
-        st.download_button(
-            "⬇️  Download PDF Report",
-            data=pdf_bytes,
-            file_name=f"{account_name.replace(' ', '_')}_Readership_Report.pdf",
-            mime="application/pdf")
-        st.markdown('</div>', unsafe_allow_html=True)
+    # ── PDF download ──────────────────────────────────────────────────────────
+    with st.spinner("Building PDF..."):
+        pdf_bytes = generate_pdf(data, account_name)
+    st.markdown('<div class="dl-btn">', unsafe_allow_html=True)
+    st.download_button(
+        "⬇️  Download PDF Report",
+        data=pdf_bytes,
+        file_name=f"{account_name.replace(' ', '_')}_Readership_Report.pdf",
+        mime="application/pdf")
+    st.markdown('</div>', unsafe_allow_html=True)
 
 else:
     st.info("Upload an analytics export above to get started.")
