@@ -128,6 +128,15 @@ def load_clean(file_bytes, filename):
     if rmap:
         df = df.rename(columns=rmap)
 
+    # Extract account name from column if present
+    account_col = next((c for c in df.columns if c.lower().strip() == 'account name'), None)
+    if account_col:
+        val = df[account_col].dropna().astype(str).str.strip()
+        val = val[val.str.lower() != 'nan']
+        file_account = val.iloc[0] if len(val) > 0 else None
+    else:
+        file_account = None
+
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
         st.error(f"Missing required columns: {', '.join(missing)}"); st.stop()
@@ -155,7 +164,7 @@ def load_clean(file_bytes, filename):
 
     df = df.drop_duplicates(subset=['Contact Email','EventAction','Report Title','EventDate'])
     df['Month'] = df['EventDate'].dt.to_period('M')
-    return df
+    return df, file_account
 
 # ── Analysis ───────────────────────────────────────────────────────────────────
 def analyse(df):
@@ -511,16 +520,17 @@ with cu:
         "Upload analytics file (.xlsx, .xls, .csv)", type=["xlsx","xls","csv"])
 with cn:
     account_name_input = st.text_input(
-        "Account / Client name (optional)", placeholder="e.g. Richardson Wealth")
+        "Override account name (optional)", placeholder="Auto-detected from file")
 
 if uploaded:
-    # Account name: manual input takes priority, otherwise derived from filename
-    account_name = (account_name_input.strip() if account_name_input.strip()
-                    else account_from_filename(uploaded.name))
-
     with st.spinner("Analysing..."):
-        df   = load_clean(uploaded.read(), uploaded.name)
+        df, file_account = load_clean(uploaded.read(), uploaded.name)
         data = analyse(df)
+
+    # Priority: manual input → Account Name column in file → filename fallback
+    account_name = (account_name_input.strip() if account_name_input.strip()
+                    else file_account if file_account
+                    else account_from_filename(uploaded.name))
 
     # ── Summary card ──────────────────────────────────────────────────────────
     st.markdown(
