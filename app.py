@@ -124,7 +124,7 @@ def load_clean(file_bytes, filename):
     df['EventSource']  = df['EventSource'].str.lower().str.strip()
 
     # Parse dates
-    df['EventDate'] = pd.to_datetime(df['EventDate'], errors='coerce', infer_datetime_format=True)
+    df['EventDate'] = pd.to_datetime(df['EventDate'], errors='coerce')
     bad = df['EventDate'].isna().sum()
     if bad:
         issues.append(f"Removed {bad} rows with unparseable dates")
