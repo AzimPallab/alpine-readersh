@@ -78,6 +78,7 @@ ALIASES  = {
     'report title':'Report Title', 'title':'Report Title', 'report':'Report Title',
     'authors':'Authors', 'author':'Authors',
     'leaf product':'Leaf product', 'product':'Leaf product', 'category':'Leaf product',
+    'account name':'Account Name', 'account':'Account Name', 'client name':'Account Name', 'client':'Account Name',
 }
 
 # ── Data loading & cleaning ────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ def load_clean(file_bytes, filename):
     df['EventSource']  = df['EventSource'].str.lower().str.strip()
 
     # Parse dates
-    df['EventDate'] = pd.to_datetime(df['EventDate'], errors='coerce')
+    df['EventDate'] = pd.to_datetime(df['EventDate'], errors='coerce', infer_datetime_format=True)
     bad = df['EventDate'].isna().sum()
     if bad:
         issues.append(f"Removed {bad} rows with unparseable dates")
@@ -139,8 +140,16 @@ def load_clean(file_bytes, filename):
     if before - len(df):
         issues.append(f"Removed {before - len(df)} duplicate events")
 
+    # Extract account name from column if present
+    detected_account = None
+    if 'Account Name' in df.columns:
+        names = df['Account Name'].dropna().astype(str).str.strip()
+        names = names[names != '']
+        if len(names):
+            detected_account = names.mode().iloc[0]  # most frequent value
+
     df['Month'] = df['EventDate'].dt.to_period('M')
-    return df, issues
+    return df, issues, detected_account
 
 # ── Analysis ───────────────────────────────────────────────────────────────────
 def analyse(df):
@@ -509,12 +518,16 @@ with cn:
     account_name = st.text_input("Account / Client name", placeholder="e.g. Richardson Wealth")
 
 if uploaded:
-    if not account_name:
-        account_name = os.path.splitext(uploaded.name)[0].split('_')[-1]
-
     with st.spinner("Cleaning and analysing..."):
-        df, issues = load_clean(uploaded.read(), uploaded.name)
+        df, issues, detected_account = load_clean(uploaded.read(), uploaded.name)
         data = analyse(df)
+
+    # Priority: manual text input > Account Name column > filename fallback
+    if not account_name:
+        if detected_account:
+            account_name = detected_account
+        else:
+            account_name = os.path.splitext(uploaded.name)[0].split('_')[-1]
 
     if issues:
         st.markdown(
